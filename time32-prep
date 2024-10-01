@@ -1,0 +1,168 @@
+#!/usr/bin/env python
+
+import argparse
+import os
+import subprocess
+import sys
+import typing
+
+from collections import defaultdict
+from pathlib import Path
+
+from elftools.common.exceptions import ELFError
+from elftools.elf.elffile import ELFFile
+
+from portage import create_trees, _encodings
+from portage.versions import cpv_getkey
+
+
+def get_ldpaths(prefix: Path) -> typing.Set[str]:
+    """Grab library paths from ldconfig"""
+
+    ldconf = subprocess.run(["ldconfig", "-r", str(prefix), "-p"],
+                            check=True,
+                            capture_output=True)
+
+    out = set()
+    for line in ldconf.stdout.splitlines():
+        if not line.startswith(b"\t"):
+            continue
+
+        _, path = line.split(b" => ", 1)
+        p_path = Path(path.decode()).parent
+        if p_path.name == "lib":
+            out.add(p_path)
+
+    return out
+
+
+def migrate(prefix: Path, update: bool) -> int:
+    """Perform or pretend the migration in prefix"""
+
+    print(f"working in prefix: {prefix!s}")
+
+    trees = create_trees(config_root=prefix, target_root=prefix)
+    vartree = trees[max(trees)]["vartree"]
+    vardb = vartree.dbapi
+
+    libdirs = get_ldpaths(prefix)
+    prefixed_libdirs = tuple(prefix / libdir.relative_to(libdir.root)
+                             for libdir in libdirs)
+    to_set_runpath = []
+    to_move = defaultdict(list)
+
+    print(f"libdirs determined to be: {' '.join(str(x) for x in libdirs)}")
+
+    new_libdirs = {libdir.parent / "libt32" for libdir in libdirs}
+    new_runpath = ":".join(str(libdir) for libdir in new_libdirs)
+    print(f"RUNPATH to add: {new_runpath}")
+
+    # iterate over all installed files
+    for p in vardb.cpv_all():
+        # skip glibc, it's ABI-agnostic
+        if cpv_getkey(p) == "sys-libs/glibc":
+            continue
+        for path_s, details in vardb._dblink(p).getcontents().items():
+            # require a file or a symlink
+            if details[0] not in ("obj", "sym"):
+                continue
+
+            path = Path(path_s)
+            # skip directory entries
+            if path.is_dir():
+                continue
+
+            # move only files directly in libdir, whose names start with "lib"
+            if path.parent in prefixed_libdirs and path.name.startswith("lib"):
+                to_move[path.parent].append(path.name)
+
+            # set RUNPATH only on regular files
+            if details[0] != "obj":
+                continue
+            try:
+                with open(path, "rb") as f:
+                    elf_file = ELFFile(f)
+                    # process only 32-bit ELF files
+                    if elf_file.elfclass != 32:
+                        continue
+
+                    # set RUNPATH only if there is at least one DT_NEEDED entry
+                    # (this should reduce the risk of breaking programs)
+                    dyn = elf_file.get_section_by_name(".dynamic")
+                    if dyn is None or not any(e.entry["d_tag"] == "DT_NEEDED"
+                                              for e in dyn.iter_tags()):
+                        continue
+
+                    to_set_runpath.append(path)
+            except (FileNotFoundError, ELFError):
+                pass
+
+    if not update:
+        print("RUNPATH would be set on the following files:")
+    else:
+        print("setting RUNPATHs:")
+
+    failed = False
+    for path in to_set_runpath:
+        print(f"{path!s}")
+        if update:
+            path_s = str(path)
+            tmp_s = path_s + ".time32.tmp"
+            ret = subprocess.run(["cp", "-a", path_s, tmp_s])
+            if ret.returncode == 0:
+                ret = subprocess.run(["patchelf", "--add-rpath", new_runpath,
+                                      tmp_s])
+            if ret.returncode == 0:
+                ret = subprocess.run(["mv", tmp_s, path_s])
+            if ret.returncode != 0:
+                failed = True
+
+    if failed:
+        print("at least one patchelf call failed, aborting")
+        return 1
+
+    print()
+    if not update:
+        print("the following files would be moved:")
+    else:
+        print("moving files:")
+
+    for libdir, files in to_move.items():
+        for filename in files:
+            print(f"{libdir / filename} -> ../libt32/")
+        if update:
+            (libdir.parent / "libt32").mkdir(exist_ok=True)
+            ret = subprocess.run(["mv"] + files + ["../libt32/"],
+                                 cwd=libdir)
+            if ret.returncode != 0:
+                failed = True
+
+    if failed:
+        print("at least one mv failed")
+        return 1
+
+    if update:
+        print("success! now you can start rebuilding. when done, remember to:")
+        print(f"  rm -rf {' '.join(str(x.parent / 'libt32') for x in to_move)}")
+
+    return 0
+
+
+def main() -> None:
+    os.umask(0o22)
+
+    argp = argparse.ArgumentParser()
+    argp.add_argument("-u", "--update",
+                      action="store_true",
+                      help="Actually perform the migration")
+    argp.add_argument("-P", "--prefix",
+                      type=Path,
+                      default="/",
+                      help="Root directory of the system to migrate")
+    args = argp.parse_args()
+
+    return migrate(args.prefix, args.update)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
