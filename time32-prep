@@ -53,9 +53,7 @@ def migrate(prefix: Path, update: bool) -> int:
 
     print(f"libdirs determined to be: {' '.join(str(x) for x in libdirs)}")
 
-    new_libdirs = {libdir.parent / "libt32" for libdir in libdirs}
-    new_runpath = ":".join(str(libdir) for libdir in new_libdirs)
-    print(f"RUNPATH to add: {new_runpath}")
+    new_libdirs = [str(libdir.parent / "libt32") for libdir in libdirs]
 
     # iterate over all installed files
     for p in vardb.cpv_all():
@@ -86,14 +84,31 @@ def migrate(prefix: Path, update: bool) -> int:
                     if elf_file.elfclass != 32:
                         continue
 
-                    # set RUNPATH only if there is at least one DT_NEEDED entry
-                    # (this should reduce the risk of breaking programs)
+                    # skip files without .dynamic section
                     dyn = elf_file.get_section_by_name(".dynamic")
-                    if dyn is None or not any(e.entry["d_tag"] == "DT_NEEDED"
-                                              for e in dyn.iter_tags()):
+                    if dyn is None:
                         continue
 
-                    to_set_runpath.append(path)
+                    # check for existing RPATH/RUNPATH
+                    runpaths = [e for e in dyn.iter_tags()
+                                if e.entry["d_tag"] in ("DT_RUNPATH",
+                                                        "DT_RPATH")]
+                    assert len(runpaths) < 2
+                    runpath = None
+                    if runpaths:
+                        if runpaths[0].entry["d_tag"] == "DT_RPATH":
+                            runpath = runpaths[0].rpath
+                        else:
+                            runpath = runpaths[0].runpath
+
+                    # set RUNPATH only if there is at least one DT_NEEDED entry
+                    # or if one is set already
+                    # (this should reduce the risk of breaking programs)
+                    has_needed = any(e.entry["d_tag"] == "DT_NEEDED"
+                                     for e in dyn.iter_tags())
+
+                    if runpath is not None or has_needed:
+                        to_set_runpath.append((path, runpath))
             except (FileNotFoundError, ELFError):
                 pass
 
@@ -103,14 +118,22 @@ def migrate(prefix: Path, update: bool) -> int:
         print("setting RUNPATHs:")
 
     failed = False
-    for path in to_set_runpath:
-        print(f"{path!s}")
+    for path, current_runpath in to_set_runpath:
+        runpath_dirs = []
+        if current_runpath is not None:
+            # remove time32 libdir from current_runpath
+            print(current_runpath)
+            runpath_dirs = [x for x in current_runpath.split(":")
+                           if Path(x) not in libdirs]
+        runpath_dirs += new_libdirs
+        new_runpath = ":".join(runpath_dirs)
+        print(f"{path!s} ({current_runpath} -> {new_runpath})")
         if update:
             path_s = str(path)
             tmp_s = path_s + ".time32.tmp"
             ret = subprocess.run(["cp", "-a", path_s, tmp_s])
             if ret.returncode == 0:
-                ret = subprocess.run(["patchelf", "--add-rpath", new_runpath,
+                ret = subprocess.run(["patchelf", "--set-rpath", new_runpath,
                                       tmp_s])
             if ret.returncode == 0:
                 ret = subprocess.run(["mv", tmp_s, path_s])
