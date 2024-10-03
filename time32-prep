@@ -160,6 +160,7 @@ def migrate(prefix: Path, update: bool) -> int:
                                  cwd=libdir)
             if ret.returncode != 0:
                 failed = True
+            # TODO: update cross-directory symlinks to lib
 
     if failed:
         print("at least one mv failed")
