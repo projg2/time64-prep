@@ -36,6 +36,13 @@ def get_ldpaths(prefix: Path) -> typing.Set[str]:
     return out
 
 
+def samefile_if_exists(p1: Path, p2: typing.Union[Path, str]) -> bool:
+    try:
+        return p1.samefile(p2)
+    except FileNotFoundError:
+        return False
+
+
 def migrate(prefix: Path, update: bool) -> int:
     """Perform or pretend the migration in prefix"""
 
@@ -127,7 +134,8 @@ def migrate(prefix: Path, update: bool) -> int:
                                 .replace("$ORIGIN", str(path.parent))
                                 ).split(":")
             runpath_dirs = [x for x in resolved_runpath
-                            if any(libdir.samefile(x) for libdir in libdirs)]
+                            if any(samefile_if_exists(libdir, x)
+                                   for libdir in libdirs)]
         runpath_dirs += new_libdirs
         new_runpath = ":".join(runpath_dirs)
         print(f"{path!s} ({current_runpath} -> {new_runpath})")
