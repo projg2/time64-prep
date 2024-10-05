@@ -122,10 +122,12 @@ def migrate(prefix: Path, update: bool) -> int:
         runpath_dirs = []
         if current_runpath is not None:
             # remove time32 libdir from current_runpath
-            print(current_runpath)
-            # TODO: handle $ORIGIN
-            runpath_dirs = [x for x in current_runpath.split(":")
-                           if Path(x) not in libdirs]
+            resolved_runpath = (current_runpath
+                                .replace("${ORIGIN}", "$ORIGIN")
+                                .replace("$ORIGIN", str(path.parent))
+                                ).split(":")
+            runpath_dirs = [x for x in resolved_runpath
+                            if any(libdir.samefile(x) for libdir in libdirs)]
         runpath_dirs += new_libdirs
         new_runpath = ":".join(runpath_dirs)
         print(f"{path!s} ({current_runpath} -> {new_runpath})")
