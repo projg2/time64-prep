@@ -57,6 +57,7 @@ def migrate(prefix: Path, update: bool) -> int:
                              for libdir in libdirs)
     to_set_runpath = []
     to_move = defaultdict(list)
+    to_rewrite_symlinks = {}
 
     print(f"libdirs determined to be: {' '.join(str(x) for x in libdirs)}")
 
@@ -79,6 +80,15 @@ def migrate(prefix: Path, update: bool) -> int:
 
             # move only files directly in libdir, whose names start with "lib"
             if path.parent in prefixed_libdirs and path.name.startswith("lib"):
+                if path.is_symlink():
+                    target = path.readlink()
+                    if str(target.parent) != ".":
+                        abs_target_parent = path.parent / target.parent
+                        if any(samefile_if_exists(abs_target_parent, libdir)
+                               for libdir in prefixed_libdirs):
+                            new_target = (target.parent.parent / "libt32" /
+                                          target.name)
+                            to_rewrite_symlinks[path] = new_target
                 to_move[path.parent].append(path.name)
 
             # set RUNPATH only on regular files
@@ -163,14 +173,22 @@ def migrate(prefix: Path, update: bool) -> int:
 
     for libdir, files in to_move.items():
         for filename in files:
-            print(f"{libdir / filename} -> ../libt32/")
+            path = libdir / filename
+            print(f"{path} -> ../libt32/")
+            new_target = to_rewrite_symlinks.get(path)
+            if new_target is not None:
+                print(f"rewrite symlink: {path.readlink()} -> {new_target}")
+                if update:
+                    ret = subprocess.run(["ln", "-s", "-f",
+                                          str(new_target), str(path)])
+                    if ret.returncode != 0:
+                        failed = True
         if update:
             (libdir.parent / "libt32").mkdir(exist_ok=True)
             ret = subprocess.run(["mv"] + files + ["../libt32/"],
                                  cwd=libdir)
             if ret.returncode != 0:
                 failed = True
-            # TODO: update cross-directory symlinks to lib
 
     if failed:
         print("at least one mv failed")
