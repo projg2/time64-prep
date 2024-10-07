@@ -63,6 +63,9 @@ def migrate(prefix: Path, update: bool) -> int:
     print(f"libdirs determined to be: {' '.join(str(x) for x in libdirs)}")
 
     new_libdirs = [str(libdir.parent / "libt32") for libdir in libdirs]
+    prefixed_new_libdirs = tuple(prefix / libdir.lstrip(os.path.sep)
+                                 for libdir in new_libdirs)
+    old_new_prefixed_libdirs = prefixed_libdirs + prefixed_new_libdirs
 
     # iterate over all installed files
     for p in vardb.cpv_all():
@@ -152,7 +155,7 @@ def migrate(prefix: Path, update: bool) -> int:
                             if not any(samefile_if_exists(libdir,
                                                           prefix /
                                                           x.lstrip(os.path.sep))
-                                       for libdir in prefixed_libdirs)]
+                                       for libdir in old_new_prefixed_libdirs)]
         runpath_dirs += new_libdirs
         new_runpath = ":".join(runpath_dirs)
         print(f"{path!s} ({current_runpath} -> {new_runpath})")
