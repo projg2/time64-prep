@@ -44,7 +44,7 @@ def samefile_if_exists(p1: Path, p2: typing.Union[Path, str]) -> bool:
         return False
 
 
-def migrate(prefix: Path, update: bool) -> int:
+def migrate(prefix: Path, update: bool, mv_shared_libs: bool) -> int:
     """Perform or pretend the migration in prefix"""
 
     print(f"working in prefix: {prefix!s}")
@@ -177,21 +177,34 @@ def migrate(prefix: Path, update: bool) -> int:
 
     print()
     if not update:
-        print("the following files would be moved:")
+        print("the following files would be copied or moved:")
     else:
-        print("moving files:")
+        print("copying or moving files:")
 
     for libdir, files in to_move.items():
+        copy = []
+        move = []
         for filename in files:
             path = libdir / filename
-            print(f"{path} -> ../libt32/")
+            if mv_shared_libs or ".so" not in filename:
+                move.append(filename)
+                print(f"[mv] {path} -> ../libt32/")
+            else:
+                copy.append(filename)
+                print(f"[cp] {path} -> ../libt32/")
+
         if update:
-            # TODO: support using cp instead
             (libdir.parent / "libt32").mkdir(exist_ok=True)
-            ret = subprocess.run(["mv"] + files + ["../libt32/"],
-                                 cwd=libdir)
-            if ret.returncode != 0:
-                failed = True
+            if copy:
+                ret = subprocess.run(["cp", "-a"] + copy + ["../libt32/"],
+                                     cwd=libdir)
+                if ret.returncode != 0:
+                    failed = True
+            if move:
+                ret = subprocess.run(["mv"] + move + ["../libt32/"],
+                                     cwd=libdir)
+                if ret.returncode != 0:
+                    failed = True
         for filename in files:
             new_target = to_rewrite_symlinks.get(libdir / filename)
             if new_target is not None:
@@ -220,6 +233,9 @@ def main() -> None:
     os.umask(0o22)
 
     argp = argparse.ArgumentParser()
+    argp.add_argument("-m", "--mv-shared-libs",
+                      action="store_true",
+                      help="Move rather than copy shared libraries")
     argp.add_argument("-u", "--update",
                       action="store_true",
                       help="Actually perform the migration")
@@ -229,7 +245,7 @@ def main() -> None:
                       help="Root directory of the system to migrate")
     args = argp.parse_args()
 
-    return migrate(args.prefix, args.update)
+    return migrate(args.prefix, args.update, args.mv_shared_libs)
 
 
 if __name__ == '__main__':
