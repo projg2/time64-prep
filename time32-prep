@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import os.path
 import subprocess
 import sys
 import typing
@@ -139,12 +140,18 @@ def migrate(prefix: Path, update: bool) -> int:
         runpath_dirs = []
         if current_runpath is not None:
             # remove time32 libdir from current_runpath
+            # NB: this causes $ORIGIN to be always expanded; this is
+            # expected since the file in question may be moved afterwards
             resolved_runpath = (current_runpath
                                 .replace("${ORIGIN}", "$ORIGIN")
-                                .replace("$ORIGIN", str(path.parent))
+                                .replace("$ORIGIN",
+                                         str(path.root /
+                                             path.parent.relative_to(prefix)))
                                 ).split(":")
             runpath_dirs = [x for x in resolved_runpath
-                            if not any(samefile_if_exists(libdir, x)
+                            if not any(samefile_if_exists(libdir,
+                                                          prefix /
+                                                          x.lstrip(os.path.sep))
                                        for libdir in prefixed_libdirs)]
         runpath_dirs += new_libdirs
         new_runpath = ":".join(runpath_dirs)
@@ -177,6 +184,7 @@ def migrate(prefix: Path, update: bool) -> int:
             print(f"{path} -> ../libt32/")
             new_target = to_rewrite_symlinks.get(path)
             if new_target is not None:
+                # TODO: move this later
                 print(f"rewrite symlink: {path.readlink()} -> {new_target}")
                 if update:
                     ret = subprocess.run(["ln", "-s", "-f",
@@ -184,6 +192,7 @@ def migrate(prefix: Path, update: bool) -> int:
                     if ret.returncode != 0:
                         failed = True
         if update:
+            # TODO: support using cp instead
             (libdir.parent / "libt32").mkdir(exist_ok=True)
             ret = subprocess.run(["mv"] + files + ["../libt32/"],
                                  cwd=libdir)
