@@ -182,15 +182,6 @@ def migrate(prefix: Path, update: bool) -> int:
         for filename in files:
             path = libdir / filename
             print(f"{path} -> ../libt32/")
-            new_target = to_rewrite_symlinks.get(path)
-            if new_target is not None:
-                # TODO: move this later
-                print(f"rewrite symlink: {path.readlink()} -> {new_target}")
-                if update:
-                    ret = subprocess.run(["ln", "-s", "-f",
-                                          str(new_target), str(path)])
-                    if ret.returncode != 0:
-                        failed = True
         if update:
             # TODO: support using cp instead
             (libdir.parent / "libt32").mkdir(exist_ok=True)
@@ -198,9 +189,21 @@ def migrate(prefix: Path, update: bool) -> int:
                                  cwd=libdir)
             if ret.returncode != 0:
                 failed = True
+        for filename in files:
+            new_target = to_rewrite_symlinks.get(libdir / filename)
+            if new_target is not None:
+                path = libdir / "../libt32" / filename
+                readlink_path = path if update else libdir / filename
+                print(f"rewrite symlink: {path} "
+                      f"({readlink_path.readlink()} -> {new_target})")
+                if update:
+                    ret = subprocess.run(["ln", "-s", "-f",
+                                          str(new_target), str(path)])
+                    if ret.returncode != 0:
+                        failed = True
 
     if failed:
-        print("at least one mv failed")
+        print("at least one operation failed")
         return 1
 
     if update:
