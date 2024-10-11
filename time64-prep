@@ -158,6 +158,9 @@ def migrate(prefix: Path, update: bool, mv_shared_libs: bool) -> int:
                                        for libdir in old_new_prefixed_libdirs)]
         runpath_dirs += new_libdirs
         new_runpath = ":".join(runpath_dirs)
+        if current_runpath == new_runpath:
+            print(f"skipping {path!s} (already {new_runpath})")
+            continue
         print(f"{path!s} ({current_runpath} -> {new_runpath})")
         if update:
             path_s = str(path)
